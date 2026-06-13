@@ -47,6 +47,12 @@ public class Camera2Wrapper {
     private ImageReader mPreviewImageReader, mCaptureImageReader;
     private Integer mSensorOrientation;
 
+    // True only while the preview session is fully configured and running. Flipped
+    // to false the moment teardown/rebuild starts so a late shutter tap cannot reach
+    // a null or closing session/surface. Read on the UI thread, written on the camera
+    // background thread, hence volatile.
+    private volatile boolean mCameraReady = false;
+
     private Semaphore mCameraLock = new Semaphore(1);
     private Size mDefaultPreviewSize = new Size(1280, 720);
     private Size mDefaultCaptureSize = new Size(1280, 720);
@@ -284,6 +290,8 @@ public class Camera2Wrapper {
 
     public void closeCamera() {
         Log.d(TAG, "closeCamera() called");
+        // Stop accepting captures before the session/device/readers are torn down.
+        mCameraReady = false;
         try {
             mCameraLock.acquire();
             if (null != mCameraCaptureSession) {
@@ -323,6 +331,7 @@ public class Camera2Wrapper {
 
         @Override
         public void onDisconnected(@NonNull CameraDevice cameraDevice) {
+            mCameraReady = false;
             mCameraLock.release();
             cameraDevice.close();
             mCameraDevice = null;
@@ -330,6 +339,7 @@ public class Camera2Wrapper {
 
         @Override
         public void onError(@NonNull CameraDevice cameraDevice, int error) {
+            mCameraReady = false;
             mCameraLock.release();
             cameraDevice.close();
             mCameraDevice = null;
@@ -355,16 +365,21 @@ public class Camera2Wrapper {
                 mPreviewRequest = createPreviewRequest();
                 if (mPreviewRequest != null) {
                     session.setRepeatingRequest(mPreviewRequest, null, mBackgroundHandler);
+                    // Publish readiness only once the preview is actually streaming.
+                    // This volatile write also makes the session assignment above
+                    // visible to capture() on the UI thread.
+                    mCameraReady = true;
                 } else {
                     Log.e(TAG, "captureRequest is null");
                 }
-            } catch (CameraAccessException e) {
+            } catch (CameraAccessException | IllegalStateException e) {
                 Log.e(TAG, "onConfigured " + e.toString());
             }
         }
 
         @Override
         public void onConfigureFailed(@NonNull CameraCaptureSession session) {
+            mCameraReady = false;
             Log.e(TAG, "onConfigureFailed");
         }
     };
@@ -401,40 +416,81 @@ public class Camera2Wrapper {
     }
 
     public void capture() {
-        if (mCameraDevice == null) return;
-        final CaptureRequest.Builder captureBuilder;
+        // Snapshot the lifecycle-managed references so they cannot be nulled out by a
+        // concurrent stopCamera()/closeCamera() between the guard check and their use.
+        final CameraDevice cameraDevice = mCameraDevice;
+        final CameraCaptureSession captureSession = mCameraCaptureSession;
+        final ImageReader captureImageReader = mCaptureImageReader;
+        final Handler backgroundHandler = mBackgroundHandler;
+
+        // Reject the shutter while the camera is closing or being rebuilt (rapid
+        // background switch, camera switch, or page close right after the tap), so we
+        // never build a still-capture request against a null/closing session or surface.
+        if (!canCapture(mCameraReady, cameraDevice, captureSession, captureImageReader, backgroundHandler)) {
+            Log.w(TAG, "capture() ignored: camera session is not ready.");
+            return;
+        }
+
         try {
-            captureBuilder = mCameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
-            captureBuilder.addTarget(mCaptureImageReader.getSurface());
+            final CaptureRequest.Builder captureBuilder =
+                    cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
+            captureBuilder.addTarget(captureImageReader.getSurface());
 
             // Use the same AE and AF modes as the preview.
             captureBuilder.set(CaptureRequest.CONTROL_AF_MODE,
                     CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
 
             // Orientation
-            CameraCaptureSession.CaptureCallback CaptureCallback
+            CameraCaptureSession.CaptureCallback captureCallback
                     = new CameraCaptureSession.CaptureCallback() {
 
                 @Override
                 public void onCaptureCompleted(@NonNull CameraCaptureSession session,
                                                @NonNull CaptureRequest request,
                                                @NonNull TotalCaptureResult result) {
-                    if (mPreviewRequest != null && mCameraCaptureSession != null) {
-                        try {
-                            mCameraCaptureSession.setRepeatingRequest(mPreviewRequest, null, mBackgroundHandler);
-                        } catch (CameraAccessException e) {
-                            e.printStackTrace();
-                        }
-                    }
+                    resumePreviewAfterCapture();
                 }
 
             };
 
-            mCameraCaptureSession.stopRepeating();
-            mCameraCaptureSession.abortCaptures();
-            mCameraCaptureSession.capture(captureBuilder.build(), CaptureCallback, null);
-        } catch (CameraAccessException e) {
-            e.printStackTrace();
+            captureSession.stopRepeating();
+            captureSession.abortCaptures();
+            captureSession.capture(captureBuilder.build(), captureCallback, backgroundHandler);
+        } catch (CameraAccessException | IllegalStateException e) {
+            // The session can still be closed concurrently between the guard above and
+            // these calls; recover the preview instead of crashing the UI.
+            Log.e(TAG, "capture() failed: " + e);
+            resumePreviewAfterCapture();
+        }
+    }
+
+    /**
+     * Returns whether a still capture may be issued right now. A capture is only safe
+     * when the preview session has been fully configured ({@code cameraReady}) and every
+     * component it depends on is still alive. Kept package-private and static so the
+     * lifecycle guard can be unit tested without the Android framework.
+     */
+    static boolean canCapture(boolean cameraReady, Object cameraDevice, Object captureSession,
+                              Object captureImageReader, Object backgroundHandler) {
+        return cameraReady
+                && cameraDevice != null
+                && captureSession != null
+                && captureImageReader != null
+                && backgroundHandler != null;
+    }
+
+    private void resumePreviewAfterCapture() {
+        final CameraCaptureSession captureSession = mCameraCaptureSession;
+        final CaptureRequest previewRequest = mPreviewRequest;
+        final Handler backgroundHandler = mBackgroundHandler;
+        if (!mCameraReady || captureSession == null || previewRequest == null
+                || backgroundHandler == null) {
+            return;
+        }
+        try {
+            captureSession.setRepeatingRequest(previewRequest, null, backgroundHandler);
+        } catch (CameraAccessException | IllegalStateException e) {
+            Log.e(TAG, "resumePreviewAfterCapture() failed: " + e);
         }
     }
 

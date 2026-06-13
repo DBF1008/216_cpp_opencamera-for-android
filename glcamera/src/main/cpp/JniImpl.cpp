@@ -46,18 +46,24 @@ JNIEXPORT jint JNICALL native_UnInit(JNIEnv *env, jobject instance) {
  * Class:     com_byteflow_openglcamera2_render_ByteFlowRender
  * Method:    native_UpdateFrame
  * Signature: (I[BII)V
+ *
+ * Uses GetPrimitiveArrayCritical to obtain a direct pointer to the Java
+ * byte[] without an extra native heap allocation or memcpy.  The renderer
+ * internally copies the data into its own persistent m_RenderFrame buffer
+ * (needed for GL-thread safety) while the array is pinned, so no stale
+ * pointer escapes the critical section.
  */
 JNIEXPORT void JNICALL
 native_UpdateFrame(JNIEnv *env, jobject instance, jint format, jbyteArray bytes, jint width,
                    jint height) {
-    int len = env->GetArrayLength(bytes);
-    unsigned char *buf = new unsigned char[len];
-    env->GetByteArrayRegion(bytes, 0, len, reinterpret_cast<jbyte *>(buf));
-
     ByteFlowRenderContext *pContext = ByteFlowRenderContext::GetRenderContext(env, instance);
-    if (pContext) pContext->UpdateFrame(format, buf, width, height);
+    if (!pContext) return;
 
-    delete[] buf;
+    jbyte *pBuf = static_cast<jbyte *>(env->GetPrimitiveArrayCritical(bytes, nullptr));
+    if (pBuf) {
+        pContext->UpdateFrame(format, reinterpret_cast<uint8_t *>(pBuf), width, height);
+        env->ReleasePrimitiveArrayCritical(bytes, pBuf, JNI_ABORT);
+    }
 }
 
 /*
@@ -68,13 +74,14 @@ native_UpdateFrame(JNIEnv *env, jobject instance, jint format, jbyteArray bytes,
 JNIEXPORT void JNICALL native_LoadFilterData
         (JNIEnv *env, jobject instance, jint index, jint format, jint width, jint height,
          jbyteArray imageData) {
-    int len = env->GetArrayLength(imageData);
-    uint8_t *buf = new uint8_t[len];
-    env->GetByteArrayRegion(imageData, 0, len, reinterpret_cast<jbyte *>(buf));
     ByteFlowRenderContext *pContext = ByteFlowRenderContext::GetRenderContext(env, instance);
-    if (pContext) pContext->LoadLutImageData(index, format, width, height, buf);
-    delete[] buf;
-    env->DeleteLocalRef(imageData);
+    if (pContext) {
+        jbyte *pBuf = static_cast<jbyte *>(env->GetPrimitiveArrayCritical(imageData, nullptr));
+        if (pBuf) {
+            pContext->LoadLutImageData(index, format, width, height, reinterpret_cast<uint8_t *>(pBuf));
+            env->ReleasePrimitiveArrayCritical(imageData, pBuf, JNI_ABORT);
+        }
+    }
 }
 
 /*

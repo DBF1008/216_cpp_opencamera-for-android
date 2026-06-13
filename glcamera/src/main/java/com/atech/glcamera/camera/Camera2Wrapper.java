@@ -56,6 +56,13 @@ public class Camera2Wrapper {
     private Size mPreviewSize, mPictureSize;
     private List<Size> mSupportPreviewSize, mSupportPictureSize;
 
+    /**
+     * Pre-allocated I420 buffer for the preview path.
+     * Reused across frames to avoid per-frame heap allocation and GC pressure.
+     * Allocated in {@link #startCamera()} once the preview size is known.
+     */
+    private byte[] mPreviewBuffer;
+
     private Handler mBackgroundHandler;
     private HandlerThread mBackgroundThread;
 
@@ -64,8 +71,10 @@ public class Camera2Wrapper {
         public void onImageAvailable(ImageReader reader) {
             Image image = reader.acquireLatestImage();
             if (image != null) {
-                if (mCamera2FrameCallback != null) {
-                    mCamera2FrameCallback.onPreviewFrame(CameraUtil.YUV_420_888_data(image), image.getWidth(), image.getHeight());
+                if (mCamera2FrameCallback != null && mPreviewBuffer != null) {
+                    // Reuse the pre-allocated buffer — no per-frame allocation.
+                    CameraUtil.YUV_420_888_data(image, mPreviewBuffer);
+                    mCamera2FrameCallback.onPreviewFrame(mPreviewBuffer, image.getWidth(), image.getHeight());
                 }
                 image.close();
             }
@@ -193,6 +202,8 @@ public class Camera2Wrapper {
             mPreviewImageReader = ImageReader.newInstance(mPreviewSize.getWidth(), mPreviewSize.getHeight(), ImageFormat.YUV_420_888, 2);
             mPreviewImageReader.setOnImageAvailableListener(mOnPreviewImageAvailableListener, mBackgroundHandler);
             mPreviewSurface = mPreviewImageReader.getSurface();
+            // Pre-allocate the I420 buffer once — reused for every preview frame.
+            mPreviewBuffer = new byte[mPreviewSize.getWidth() * mPreviewSize.getHeight() * 3 / 2];
         }
 
         if (mCaptureImageReader == null && mPictureSize != null) {
@@ -212,6 +223,10 @@ public class Camera2Wrapper {
             mPreviewImageReader = ImageReader.newInstance(mPreviewSize.getWidth(), mPreviewSize.getHeight(), ImageFormat.YUV_420_888, 2);
             mPreviewImageReader.setOnImageAvailableListener(mOnPreviewImageAvailableListener, mBackgroundHandler);
             mPreviewSurface = mPreviewImageReader.getSurface();
+        }
+        // Pre-allocate the I420 buffer once — reused for every preview frame.
+        if (mPreviewSize != null) {
+            mPreviewBuffer = new byte[mPreviewSize.getWidth() * mPreviewSize.getHeight() * 3 / 2];
         }
 
         if (mCaptureImageReader == null && mPictureSize != null) {
@@ -303,6 +318,7 @@ public class Camera2Wrapper {
                 mCaptureImageReader.close();
                 mCaptureImageReader = null;
             }
+            mPreviewBuffer = null;
         } catch (InterruptedException e) {
             throw new RuntimeException("Interrupted while trying to lock camera closing.", e);
         } finally {

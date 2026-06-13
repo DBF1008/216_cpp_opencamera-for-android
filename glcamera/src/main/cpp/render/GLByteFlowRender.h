@@ -119,6 +119,13 @@ private:
 	NativeImage m_ExtRgbaImage;
 	SyncLock m_SynLock;
 
+	/**
+	 * Protects m_RenderFrame (inherited from ByteFlowRender) against concurrent
+	 * access between the camera thread (writer, via UpdateFrame) and the GL
+	 * thread (reader, via UpdateTextures / OnDrawFrame).
+	 */
+	SyncLock m_FrameLock;
+
 	volatile bool m_IsUpdateExtTexture;
 
 	char *m_pFragShaderBuf;

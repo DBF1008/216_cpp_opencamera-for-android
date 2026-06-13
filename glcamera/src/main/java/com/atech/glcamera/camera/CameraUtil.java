@@ -38,12 +38,32 @@ public class CameraUtil {
         return new Size(res.x, res.y);
     }
 
+    /**
+     * Convert an Android YUV_420_888 Image to packed I420, allocating a new byte array.
+     * Used for one-shot capture where per-call allocation is acceptable.
+     */
     public static byte[] YUV_420_888_data(Image image) {
         final int imageWidth = image.getWidth();
         final int imageHeight = image.getHeight();
-        final Image.Plane[] planes = image.getPlanes();
         byte[] data = new byte[imageWidth * imageHeight *
                 ImageFormat.getBitsPerPixel(ImageFormat.YUV_420_888) / 8];
+        YUV_420_888_data(image, data);
+        return data;
+    }
+
+    /**
+     * Convert an Android YUV_420_888 Image to packed I420, writing into a
+     * caller-supplied buffer.  The buffer must be at least
+     * {@code width * height * 3 / 2} bytes long.
+     * <p>
+     * This overload avoids per-frame heap allocation and is intended for the
+     * high-frequency preview path where the same buffer is reused across
+     * frames to eliminate GC pressure.
+     */
+    public static void YUV_420_888_data(Image image, byte[] data) {
+        final int imageWidth = image.getWidth();
+        final int imageHeight = image.getHeight();
+        final Image.Plane[] planes = image.getPlanes();
         int offset = 0;
 
         for (int plane = 0; plane < planes.length; ++plane) {
@@ -76,7 +96,5 @@ public class CameraUtil {
                 }
             }
         }
-
-        return data;
     }
 }

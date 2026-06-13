@@ -76,7 +76,10 @@ int GLByteFlowRender::Init(int initType) {
 
 int GLByteFlowRender::UnInit() {
     LOGCATE("GLByteFlowRender::UnInit");
-    NativeImageUtil::FreeNativeImage(&m_RenderFrame);
+    {
+        ByteFlowLock lock(&m_FrameLock);
+        NativeImageUtil::FreeNativeImage(&m_RenderFrame);
+    }
     NativeImageUtil::FreeNativeImage(&m_ExtRgbaImage);
     //DeleteTextures();
     //GLUtils::DeleteProgram(m_Program);
@@ -93,6 +96,7 @@ int GLByteFlowRender::UnInit() {
 void GLByteFlowRender::UpdateFrame(NativeImage *pImage) {
     LOGCATE("GLByteFlowRender::UpdateFrame");
     if (pImage == nullptr) return;
+    ByteFlowLock lock(&m_FrameLock);
     if (pImage->width != m_RenderFrame.width || pImage->height != m_RenderFrame.height) {
         if (m_RenderFrame.ppPlane[0] != NULL) {
             NativeImageUtil::FreeNativeImage(&m_RenderFrame);
@@ -192,6 +196,13 @@ bool GLByteFlowRender::CreateTextures() {
 
 bool GLByteFlowRender::UpdateTextures() {
     LOGCATE("GLByteFlowRender::UpdateTextures");
+
+    // Hold m_FrameLock while reading m_RenderFrame to prevent tearing when
+    // the camera thread is writing via UpdateFrame().  Lock ordering is
+    // always m_FrameLock → m_SynLock, so no deadlock with the ext-texture
+    // section below.
+    ByteFlowLock lock(&m_FrameLock);
+
     if (m_RenderFrame.ppPlane[0] == NULL) {
         return false;
     }
@@ -218,7 +229,7 @@ bool GLByteFlowRender::UpdateTextures() {
                  (GLsizei) m_RenderFrame.height >> 1, 0,
                  GL_LUMINANCE, GL_UNSIGNED_BYTE, m_RenderFrame.ppPlane[2]);
 
-    ByteFlowLock lock(&m_SynLock);
+    ByteFlowLock extLock(&m_SynLock);
     if (m_IsUpdateExtTexture && m_ExtRgbaImage.ppPlane[0]) {
         if (m_ExtRgbaTextureId) {
             glDeleteTextures(1, &m_ExtRgbaTextureId);

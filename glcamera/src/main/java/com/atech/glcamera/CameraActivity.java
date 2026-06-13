@@ -123,6 +123,7 @@ public class CameraActivity extends AppCompatActivity implements Camera2FrameCal
         mRootView.addView(mGLSurfaceView, p);
         mByteFlowRender = new GLByteFlowRender();
         mByteFlowRender.init(mGLSurfaceView);
+        mByteFlowRender.addCallback(this);
         mByteFlowRender.loadShaderFromAssetsFile(mSampleSelectedIndex, getResources());
         //注意先执行render后初始化相机
         mCamera2Wrapper = new Camera2Wrapper(this);
@@ -357,8 +358,14 @@ public class CameraActivity extends AppCompatActivity implements Camera2FrameCal
     }
 
     @Override
-    public void onReadPixelsSaveToLocal(String imgPath) {
+    public void onReadPixelsComplete() {
+        // Always re-enable the capture gate, regardless of save success or failure.
+        // This prevents the camera from being permanently stuck after a failed save.
         mReadPixelsReady = true;
+    }
+
+    @Override
+    public void onReadPixelsSaveToLocal(String imgPath) {
         runOnUiThread(new Runnable() {
             @Override
             public void run() {

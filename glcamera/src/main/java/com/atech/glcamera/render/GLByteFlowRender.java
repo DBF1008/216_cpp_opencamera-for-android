@@ -114,9 +114,14 @@ public class GLByteFlowRender extends ByteFlowRender implements GLSurfaceView.Re
         native_OnDrawFrame();
 
         if (mReadPixels) {
-            Bitmap bitmap = createBitmapFromGLSurface(0, 0, mCurrentImgSize.getWidth(), mCurrentImgSize.getHeight());
-            saveToLocal(bitmap, mImagePath);
             mReadPixels = false;
+            Bitmap bitmap = null;
+            try {
+                bitmap = createBitmapFromGLSurface(0, 0, mCurrentImgSize.getWidth(), mCurrentImgSize.getHeight());
+            } catch (Exception e) {
+                Log.e(TAG, "Failed to read pixels from GL surface", e);
+            }
+            saveToLocal(bitmap, mImagePath);
         }
     }
 
@@ -149,27 +154,70 @@ public class GLByteFlowRender extends ByteFlowRender implements GLSurfaceView.Re
     }
 
     private void saveToLocal(Bitmap bitmap, String imgPath) {
-        File file = new File(imgPath);
-        if (file.exists()) {
-            file.delete();
-        }
-        FileOutputStream out;
+        boolean success = false;
+        String savedPath = null;
         try {
-            out = new FileOutputStream(file);
-            if (bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)) {
-                out.flush();
-                out.close();
-                if(mCallback != null) mCallback.onReadPixelsSaveToLocal(file.getAbsolutePath());
+            if (bitmap == null) {
+                Log.e(TAG, "saveToLocal: bitmap is null, cannot save");
+                return;
             }
-            bitmap.recycle();
-        } catch (FileNotFoundException e) {
-            e.printStackTrace();
-        } catch (IOException e) {
-            e.printStackTrace();
+            if (imgPath == null || imgPath.isEmpty()) {
+                Log.e(TAG, "saveToLocal: imgPath is null or empty");
+                return;
+            }
+
+            File file = new File(imgPath);
+            if (file.exists()) {
+                file.delete();
+            }
+
+            FileOutputStream out = null;
+            try {
+                out = new FileOutputStream(file);
+                if (bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)) {
+                    out.flush();
+                    success = true;
+                    savedPath = file.getAbsolutePath();
+                } else {
+                    Log.e(TAG, "saveToLocal: bitmap.compress() returned false");
+                }
+            } catch (FileNotFoundException e) {
+                Log.e(TAG, "saveToLocal: file not found", e);
+            } catch (IOException e) {
+                Log.e(TAG, "saveToLocal: IO error", e);
+            } finally {
+                if (out != null) {
+                    try {
+                        out.close();
+                    } catch (IOException e) {
+                        Log.e(TAG, "saveToLocal: failed to close output stream", e);
+                    }
+                }
+            }
+        } finally {
+            if (bitmap != null && !bitmap.isRecycled()) {
+                bitmap.recycle();
+            }
+            if (success && mCallback != null) {
+                mCallback.onReadPixelsSaveToLocal(savedPath);
+            }
+            if (mCallback != null) {
+                mCallback.onReadPixelsComplete();
+            }
         }
     }
 
     public interface Callback {
+        /**
+         * Called when a readPixels capture cycle has fully finished (success or failure).
+         * This is always invoked, and is the correct place to re-enable the capture gate.
+         */
+        void onReadPixelsComplete();
+
+        /**
+         * Called only when the captured image was successfully compressed and written to disk.
+         * @param imgPath the absolute path of the saved JPEG file
+         */
         void onReadPixelsSaveToLocal(String imgPath);
     }
 }

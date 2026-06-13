@@ -51,6 +51,8 @@ public class Camera2Wrapper {
     private Size mDefaultPreviewSize = new Size(1280, 720);
     private Size mDefaultCaptureSize = new Size(1280, 720);
 
+    private volatile boolean mSessionReady = false;
+
     private Surface mPreviewSurface;
 
     private Size mPreviewSize, mPictureSize;
@@ -284,6 +286,7 @@ public class Camera2Wrapper {
 
     public void closeCamera() {
         Log.d(TAG, "closeCamera() called");
+        mSessionReady = false;
         try {
             mCameraLock.acquire();
             if (null != mCameraCaptureSession) {
@@ -326,6 +329,7 @@ public class Camera2Wrapper {
             mCameraLock.release();
             cameraDevice.close();
             mCameraDevice = null;
+            mSessionReady = false;
         }
 
         @Override
@@ -333,6 +337,7 @@ public class Camera2Wrapper {
             mCameraLock.release();
             cameraDevice.close();
             mCameraDevice = null;
+            mSessionReady = false;
         }
     };
 
@@ -351,6 +356,7 @@ public class Camera2Wrapper {
         @Override
         public void onConfigured(@NonNull CameraCaptureSession session) {
             mCameraCaptureSession = session;
+            mSessionReady = true;
             try {
                 mPreviewRequest = createPreviewRequest();
                 if (mPreviewRequest != null) {
@@ -360,12 +366,20 @@ public class Camera2Wrapper {
                 }
             } catch (CameraAccessException e) {
                 Log.e(TAG, "onConfigured " + e.toString());
+                mSessionReady = false;
             }
         }
 
         @Override
         public void onConfigureFailed(@NonNull CameraCaptureSession session) {
             Log.e(TAG, "onConfigureFailed");
+            mSessionReady = false;
+        }
+
+        @Override
+        public void onClosed(@NonNull CameraCaptureSession session) {
+            super.onClosed(session);
+            mSessionReady = false;
         }
     };
 
@@ -401,7 +415,11 @@ public class Camera2Wrapper {
     }
 
     public void capture() {
-        if (mCameraDevice == null) return;
+        if (mCameraDevice == null || mCameraCaptureSession == null
+                || mCaptureImageReader == null || !mSessionReady) {
+            Log.w(TAG, "capture() skipped: camera session not ready");
+            return;
+        }
         final CaptureRequest.Builder captureBuilder;
         try {
             captureBuilder = mCameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
@@ -419,11 +437,13 @@ public class Camera2Wrapper {
                 public void onCaptureCompleted(@NonNull CameraCaptureSession session,
                                                @NonNull CaptureRequest request,
                                                @NonNull TotalCaptureResult result) {
-                    if (mPreviewRequest != null && mCameraCaptureSession != null) {
+                    if (mPreviewRequest != null && mCameraCaptureSession != null && mSessionReady) {
                         try {
                             mCameraCaptureSession.setRepeatingRequest(mPreviewRequest, null, mBackgroundHandler);
                         } catch (CameraAccessException e) {
-                            e.printStackTrace();
+                            Log.e(TAG, "capture callback: " + e.toString());
+                        } catch (IllegalStateException e) {
+                            Log.e(TAG, "capture callback: session closed - " + e.toString());
                         }
                     }
                 }
@@ -434,7 +454,11 @@ public class Camera2Wrapper {
             mCameraCaptureSession.abortCaptures();
             mCameraCaptureSession.capture(captureBuilder.build(), CaptureCallback, null);
         } catch (CameraAccessException e) {
-            e.printStackTrace();
+            Log.e(TAG, "capture() failed: " + e.toString());
+        } catch (IllegalStateException e) {
+            Log.e(TAG, "capture() failed: session closed - " + e.toString());
+        } catch (NullPointerException e) {
+            Log.e(TAG, "capture() failed: resource already released - " + e.toString());
         }
     }
 
@@ -478,5 +502,10 @@ public class Camera2Wrapper {
 
     public Integer getSensorOrientation() {
         return mSensorOrientation;
+    }
+
+    /** Returns true when the capture session is fully configured and ready to accept requests. */
+    boolean isSessionReady() {
+        return mSessionReady;
     }
 }

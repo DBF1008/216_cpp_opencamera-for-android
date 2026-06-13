@@ -65,6 +65,7 @@ public class CameraActivity extends AppCompatActivity implements Camera2FrameCal
 
     private boolean mReadPixelsReady = true;
     private int mSampleSelectedIndex = 0;
+    private boolean mIsCameraStarted = false;
 
     protected static final int LUT_A_SHADER_INDEX = 19;
     protected static final int LUT_B_SHADER_INDEX = 20;
@@ -152,9 +153,16 @@ public class CameraActivity extends AppCompatActivity implements Camera2FrameCal
     protected void onResume() {
         super.onResume();
 
-        if (hasPermissionsGranted(REQUEST_PERMISSIONS)) {
+        // Resume GL rendering thread BEFORE starting the camera,
+        // so the surface is ready to receive frames.
+        if (mGLSurfaceView != null) {
+            mGLSurfaceView.onResume();
+        }
+
+        if (!mIsCameraStarted && hasPermissionsGranted(REQUEST_PERMISSIONS)) {
             mCamera2Wrapper.startCamera();
-        } else {
+            mIsCameraStarted = true;
+        } else if (!hasPermissionsGranted(REQUEST_PERMISSIONS)) {
             ActivityCompat.requestPermissions(this, REQUEST_PERMISSIONS, CAMERA_PERMISSION_REQUEST_CODE);
         }
         updateTransformMatrix(mCamera2Wrapper.getCameraId());
@@ -165,11 +173,19 @@ public class CameraActivity extends AppCompatActivity implements Camera2FrameCal
 
     @Override
     protected void onPause() {
-        super.onPause();
-
-        if (hasPermissionsGranted(REQUEST_PERMISSIONS)) {
+        // Stop the camera FIRST to prevent frames from being sent
+        // to a GL surface that is about to be paused.
+        if (mIsCameraStarted && hasPermissionsGranted(REQUEST_PERMISSIONS)) {
             mCamera2Wrapper.stopCamera();
+            mIsCameraStarted = false;
         }
+
+        // Pause GL rendering thread AFTER camera is stopped.
+        if (mGLSurfaceView != null) {
+            mGLSurfaceView.onPause();
+        }
+
+        // Call super.onPause() exactly ONCE, at the end.
         super.onPause();
     }
 
@@ -178,7 +194,7 @@ public class CameraActivity extends AppCompatActivity implements Camera2FrameCal
         super.onDestroy();
 
         mByteFlowRender.unInit();
-
+        mIsCameraStarted = false;
     }
 
     private void updateTransformMatrix(String cameraId) {
@@ -228,7 +244,10 @@ public class CameraActivity extends AppCompatActivity implements Camera2FrameCal
 
         if (requestCode == CAMERA_PERMISSION_REQUEST_CODE) {
             if (hasPermissionsGranted(REQUEST_PERMISSIONS)) {
-                mCamera2Wrapper.startCamera();
+                if (!mIsCameraStarted) {
+                    mCamera2Wrapper.startCamera();
+                    mIsCameraStarted = true;
+                }
                 updateTransformMatrix(mCamera2Wrapper.getCameraId());
             } else {
                 Toast.makeText(this, "We need the camera permission.", Toast.LENGTH_SHORT).show();
@@ -243,6 +262,10 @@ public class CameraActivity extends AppCompatActivity implements Camera2FrameCal
     @Override
     public void onPreviewFrame(byte[] data, int width, int height) {
         Log.v(TAG,width+"&"+height);
+        // Guard: only render if camera is still in started state.
+        // This prevents a race where the camera background thread delivers
+        // a frame after onPause() has already paused the GL surface.
+        if (!mIsCameraStarted) return;
         mByteFlowRender.setRenderFrame(IMAGE_FORMAT_I420, data, width, height);
         mByteFlowRender.requestRender();
 
@@ -271,6 +294,7 @@ public class CameraActivity extends AppCompatActivity implements Camera2FrameCal
 
     @Override
     public void onCaptureFrame(byte[] data, int width, int height) {
+        if (!mIsCameraStarted) return;
         ByteFlowFrame byteFlowFrame = new ByteFlowFrame(data, width, height);
         if(mReadPixelsReady) {
             mReadPixelsReady = false;

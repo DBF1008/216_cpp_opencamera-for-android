@@ -50,14 +50,29 @@ JNIEXPORT jint JNICALL native_UnInit(JNIEnv *env, jobject instance) {
 JNIEXPORT void JNICALL
 native_UpdateFrame(JNIEnv *env, jobject instance, jint format, jbyteArray bytes, jint width,
                    jint height) {
-    int len = env->GetArrayLength(bytes);
-    unsigned char *buf = new unsigned char[len];
-    env->GetByteArrayRegion(bytes, 0, len, reinterpret_cast<jbyte *>(buf));
+    if (bytes == nullptr) return;
 
+    // Resolve the context first: GetRenderContext performs JNI calls (GetLongField), which are
+    // forbidden inside a GetPrimitiveArrayCritical region.
     ByteFlowRenderContext *pContext = ByteFlowRenderContext::GetRenderContext(env, instance);
-    if (pContext) pContext->UpdateFrame(format, buf, width, height);
+    if (pContext == nullptr) return;
 
-    delete[] buf;
+    // Hot preview path: hand the Java array's own backing memory straight to the renderer instead
+    // of allocating a fresh native buffer and copying the whole frame here every call. The renderer
+    // (GLByteFlowRender::UpdateFrame) copies the data exactly once into its reusable m_RenderFrame,
+    // so this intermediate allocation + copy was pure overhead and the main source of per-frame
+    // native heap churn / GC pressure at high resolution or frame rate.
+    //
+    // GetPrimitiveArrayCritical returns a direct pointer to the array storage with high probability
+    // (unlike GetByteArrayElements, which on ART typically returns a copy). The region stays short
+    // and makes no JNI calls and no blocking calls (only the renderer's bounded memcpy), and the
+    // data is consumed synchronously before release, so JNI_ABORT releases the pin without copyback.
+    void *pData = env->GetPrimitiveArrayCritical(bytes, nullptr);
+    if (pData == nullptr) return;
+
+    pContext->UpdateFrame(format, reinterpret_cast<uint8_t *>(pData), width, height);
+
+    env->ReleasePrimitiveArrayCritical(bytes, pData, JNI_ABORT);
 }
 
 /*

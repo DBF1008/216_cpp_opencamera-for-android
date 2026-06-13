@@ -114,9 +114,21 @@ public class GLByteFlowRender extends ByteFlowRender implements GLSurfaceView.Re
         native_OnDrawFrame();
 
         if (mReadPixels) {
-            Bitmap bitmap = createBitmapFromGLSurface(0, 0, mCurrentImgSize.getWidth(), mCurrentImgSize.getHeight());
-            saveToLocal(bitmap, mImagePath);
+            // Consume the one-shot flag up front so a failure below can never re-trigger
+            // the read-pixels path on every subsequent frame.
             mReadPixels = false;
+            Bitmap bitmap = null;
+            try {
+                bitmap = createBitmapFromGLSurface(0, 0, mCurrentImgSize.getWidth(), mCurrentImgSize.getHeight());
+            } catch (Exception e) {
+                Log.e(TAG, "onDrawFrame: failed to read pixels from GL surface", e);
+            }
+            // State 1: capture complete (pixels successfully read off the GL surface).
+            if (bitmap != null && mCallback != null) {
+                mCallback.onReadPixelsComplete();
+            }
+            // States 2/3: saveToLocal always reports either success or failure below.
+            saveToLocal(bitmap, mImagePath);
         }
     }
 
@@ -149,27 +161,82 @@ public class GLByteFlowRender extends ByteFlowRender implements GLSurfaceView.Re
     }
 
     private void saveToLocal(Bitmap bitmap, String imgPath) {
+        // Guard the failure modes that previously left the capture gate stuck closed:
+        // an empty/null path (e.g. getExternalFilesDir() returned null) or a missing bitmap.
+        if (imgPath == null || imgPath.isEmpty()) {
+            if (bitmap != null) {
+                bitmap.recycle();
+            }
+            notifySaveFailed("save path is null or empty");
+            return;
+        }
+        if (bitmap == null) {
+            notifySaveFailed("captured bitmap is null");
+            return;
+        }
+
         File file = new File(imgPath);
         if (file.exists()) {
             file.delete();
         }
-        FileOutputStream out;
+        FileOutputStream out = null;
+        boolean success = false;
         try {
             out = new FileOutputStream(file);
             if (bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)) {
                 out.flush();
-                out.close();
-                if(mCallback != null) mCallback.onReadPixelsSaveToLocal(file.getAbsolutePath());
+                success = true;
+            } else {
+                Log.e(TAG, "saveToLocal: bitmap.compress() returned false for " + imgPath);
+            }
+        } catch (FileNotFoundException e) {
+            Log.e(TAG, "saveToLocal: cannot create file " + imgPath, e);
+        } catch (IOException e) {
+            Log.e(TAG, "saveToLocal: I/O error while writing " + imgPath, e);
+        } finally {
+            if (out != null) {
+                try {
+                    out.close();
+                } catch (IOException e) {
+                    // A failed close means the file may be truncated/incomplete.
+                    success = false;
+                    Log.e(TAG, "saveToLocal: failed to close stream for " + imgPath, e);
+                }
             }
             bitmap.recycle();
-        } catch (FileNotFoundException e) {
-            e.printStackTrace();
-        } catch (IOException e) {
-            e.printStackTrace();
+        }
+
+        if (success) {
+            // State 2: save succeeded.
+            if (mCallback != null) {
+                mCallback.onReadPixelsSaveSuccess(file.getAbsolutePath());
+            }
+        } else {
+            // State 3: save failed.
+            notifySaveFailed("failed to write image to " + imgPath);
         }
     }
 
+    private void notifySaveFailed(String reason) {
+        Log.e(TAG, "saveToLocal failed: " + reason);
+        if (mCallback != null) {
+            mCallback.onReadPixelsSaveFailed(reason);
+        }
+    }
+
+    /**
+     * Callbacks for the three distinct outcomes of a screenshot request. Exactly one of
+     * {@link #onReadPixelsSaveSuccess(String)} or {@link #onReadPixelsSaveFailed(String)} is
+     * always invoked for every capture, so the caller can reliably release its capture gate.
+     */
     public interface Callback {
-        void onReadPixelsSaveToLocal(String imgPath);
+        /** Pixels were successfully read off the GL surface (the shot was taken). */
+        void onReadPixelsComplete();
+
+        /** The captured frame was encoded and written to {@code imgPath}. */
+        void onReadPixelsSaveSuccess(String imgPath);
+
+        /** The capture could not be saved; {@code reason} describes why. */
+        void onReadPixelsSaveFailed(String reason);
     }
 }

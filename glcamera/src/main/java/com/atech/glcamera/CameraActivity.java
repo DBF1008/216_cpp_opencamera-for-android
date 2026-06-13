@@ -63,7 +63,7 @@ public class CameraActivity extends AppCompatActivity implements Camera2FrameCal
     TextView tvFilter;
     FrameLayout flCamera;
 
-    private boolean mReadPixelsReady = true;
+    private final CaptureGate mCaptureGate = new CaptureGate();
     private int mSampleSelectedIndex = 0;
 
     protected static final int LUT_A_SHADER_INDEX = 19;
@@ -123,6 +123,7 @@ public class CameraActivity extends AppCompatActivity implements Camera2FrameCal
         mRootView.addView(mGLSurfaceView, p);
         mByteFlowRender = new GLByteFlowRender();
         mByteFlowRender.init(mGLSurfaceView);
+        mByteFlowRender.addCallback(this);
         mByteFlowRender.loadShaderFromAssetsFile(mSampleSelectedIndex, getResources());
         //注意先执行render后初始化相机
         mCamera2Wrapper = new Camera2Wrapper(this);
@@ -272,9 +273,8 @@ public class CameraActivity extends AppCompatActivity implements Camera2FrameCal
     @Override
     public void onCaptureFrame(byte[] data, int width, int height) {
         ByteFlowFrame byteFlowFrame = new ByteFlowFrame(data, width, height);
-        if(mReadPixelsReady) {
-            mReadPixelsReady = false;
-            mByteFlowRender.readPixels(new Size(byteFlowFrame.getHeight(),byteFlowFrame.getWidth()), getResultImgFile(".jpg").getPath());
+        if (mCaptureGate.tryBeginCapture()) {
+            mByteFlowRender.readPixels(new Size(byteFlowFrame.getHeight(), byteFlowFrame.getWidth()), getResultImgFile(".jpg").getPath());
         }
         mByteFlowRender.requestRender();
 
@@ -357,12 +357,34 @@ public class CameraActivity extends AppCompatActivity implements Camera2FrameCal
     }
 
     @Override
-    public void onReadPixelsSaveToLocal(String imgPath) {
-        mReadPixelsReady = true;
+    public void onReadPixelsComplete() {
+        // The shot was captured (pixels read off the GL surface); the save outcome is
+        // reported separately by the success/failed callbacks below.
+        Log.d(TAG, "onReadPixelsComplete: frame captured, saving...");
+    }
+
+    @Override
+    public void onReadPixelsSaveSuccess(final String imgPath) {
+        // Release the gate so the next capture can start.
+        mCaptureGate.finishCapture();
         runOnUiThread(new Runnable() {
             @Override
             public void run() {
                 Toast.makeText(CameraActivity.this, "Save result image to path:" + imgPath, Toast.LENGTH_SHORT).show();
+            }
+        });
+    }
+
+    @Override
+    public void onReadPixelsSaveFailed(final String reason) {
+        // Crucial: release the gate on failure too. Otherwise a single failed save would
+        // leave the gate closed and silently block every subsequent capture.
+        mCaptureGate.finishCapture();
+        Log.e(TAG, "onReadPixelsSaveFailed: " + reason);
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                Toast.makeText(CameraActivity.this, "Failed to save image: " + reason, Toast.LENGTH_SHORT).show();
             }
         });
     }

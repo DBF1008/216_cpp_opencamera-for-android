@@ -57,6 +57,7 @@ public class CameraActivity extends AppCompatActivity implements Camera2FrameCal
     GLByteFlowRender mByteFlowRender;
     Size mRootViewSize, mScreenSize;
     RelativeLayout mRootView;
+    private CameraLifecycleController mLifecycle;
 
     private static final String TAG = "MainActivity";
 
@@ -127,6 +128,38 @@ public class CameraActivity extends AppCompatActivity implements Camera2FrameCal
         //注意先执行render后初始化相机
         mCamera2Wrapper = new Camera2Wrapper(this);
 
+        mLifecycle = new CameraLifecycleController(new CameraLifecycleController.Host() {
+            @Override
+            public boolean hasCameraPermission() {
+                return hasPermissionsGranted(REQUEST_PERMISSIONS);
+            }
+
+            @Override
+            public void requestCameraPermission() {
+                ActivityCompat.requestPermissions(CameraActivity.this, REQUEST_PERMISSIONS, CAMERA_PERMISSION_REQUEST_CODE);
+            }
+
+            @Override
+            public void startCamera() {
+                mCamera2Wrapper.startCamera();
+            }
+
+            @Override
+            public void stopCamera() {
+                mCamera2Wrapper.stopCamera();
+            }
+
+            @Override
+            public void resumeRenderer() {
+                mGLSurfaceView.onResume();
+            }
+
+            @Override
+            public void pauseRenderer() {
+                mGLSurfaceView.onPause();
+            }
+        });
+
         tvFilter = findViewById(R.id.tv_filter);
         flCamera = findViewById(R.id.fl_camera);
 
@@ -152,11 +185,8 @@ public class CameraActivity extends AppCompatActivity implements Camera2FrameCal
     protected void onResume() {
         super.onResume();
 
-        if (hasPermissionsGranted(REQUEST_PERMISSIONS)) {
-            mCamera2Wrapper.startCamera();
-        } else {
-            ActivityCompat.requestPermissions(this, REQUEST_PERMISSIONS, CAMERA_PERMISSION_REQUEST_CODE);
-        }
+        mLifecycle.onResume();
+
         updateTransformMatrix(mCamera2Wrapper.getCameraId());
         if (mRootView != null) {
             updateGLSurfaceViewSize(mCamera2Wrapper.getPreviewSize());
@@ -165,11 +195,7 @@ public class CameraActivity extends AppCompatActivity implements Camera2FrameCal
 
     @Override
     protected void onPause() {
-        super.onPause();
-
-        if (hasPermissionsGranted(REQUEST_PERMISSIONS)) {
-            mCamera2Wrapper.stopCamera();
-        }
+        mLifecycle.onPause();
         super.onPause();
     }
 
@@ -228,7 +254,7 @@ public class CameraActivity extends AppCompatActivity implements Camera2FrameCal
 
         if (requestCode == CAMERA_PERMISSION_REQUEST_CODE) {
             if (hasPermissionsGranted(REQUEST_PERMISSIONS)) {
-                mCamera2Wrapper.startCamera();
+                mLifecycle.onCameraPermissionGranted();
                 updateTransformMatrix(mCamera2Wrapper.getCameraId());
             } else {
                 Toast.makeText(this, "We need the camera permission.", Toast.LENGTH_SHORT).show();

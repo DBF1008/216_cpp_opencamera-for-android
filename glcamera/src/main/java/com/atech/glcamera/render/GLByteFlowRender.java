@@ -1,18 +1,12 @@
 package com.atech.glcamera.render;
 
 import android.content.res.Resources;
-import android.graphics.Bitmap;
-import android.graphics.Matrix;
 import android.opengl.GLES20;
 import android.opengl.GLSurfaceView;
 import android.util.Log;
 import android.util.Size;
 
 import java.io.ByteArrayOutputStream;
-import java.io.File;
-import java.io.FileNotFoundException;
-import java.io.FileOutputStream;
-import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
 
@@ -25,7 +19,17 @@ public class GLByteFlowRender extends ByteFlowRender implements GLSurfaceView.Re
     public volatile boolean mReadPixels = false;
     private Size mCurrentImgSize;
     private String mImagePath;
-    private Callback mCallback;
+    private volatile Callback mCallback;
+    private final SnapshotSaver mSnapshotSaver = new SnapshotSaver();
+    private final SnapshotSaver.Callback mSaveCallback = new SnapshotSaver.Callback() {
+        @Override
+        public void onSaved(String path) {
+            Callback callback = mCallback;
+            if (callback != null) {
+                callback.onReadPixelsSaveToLocal(path);
+            }
+        }
+    };
 
     public GLByteFlowRender() {
 
@@ -114,13 +118,21 @@ public class GLByteFlowRender extends ByteFlowRender implements GLSurfaceView.Re
         native_OnDrawFrame();
 
         if (mReadPixels) {
-            Bitmap bitmap = createBitmapFromGLSurface(0, 0, mCurrentImgSize.getWidth(), mCurrentImgSize.getHeight());
-            saveToLocal(bitmap, mImagePath);
             mReadPixels = false;
+            int width = mCurrentImgSize.getWidth();
+            int height = mCurrentImgSize.getHeight();
+            String path = mImagePath;
+            // Only the pixel read needs the live GL context/thread. Read into a fresh
+            // buffer here, then hand the raw bytes off so JPEG encode + file I/O run on a
+            // background thread and never block the render loop / live preview.
+            ByteBuffer buffer = ByteBuffer.allocate(width * height * 4);
+            GLES20.glReadPixels(0, 0, width, height, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, buffer);
+            mSnapshotSaver.save(buffer.array(), width, height, path, mSaveCallback);
         }
     }
 
     public void unInit() {
+        mSnapshotSaver.release();
         native_UnInit();
         native_DestroyContext();
     }
@@ -129,44 +141,11 @@ public class GLByteFlowRender extends ByteFlowRender implements GLSurfaceView.Re
         mCallback = callback;
     }
 
-    private Bitmap createBitmapFromGLSurface(int x, int y, int w, int h) {
-        ByteBuffer buffer = ByteBuffer.allocate(w * h * 4);
-        GLES20.glReadPixels(x, y, w, h, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, buffer);
-        Bitmap bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
-        bitmap.copyPixelsFromBuffer(buffer);
-        Matrix matrix = new Matrix();
-        matrix.setRotate(180);
-        matrix.postScale(-1, 1);
-        Bitmap newBM = Bitmap.createBitmap(bitmap, 0, 0, w, h, matrix, false);
-        return newBM;
-    }
-
     public void readPixels(Size size, String imagePath)
     {
         mCurrentImgSize = new Size(size.getWidth(), size.getHeight());
         mImagePath = imagePath;
         mReadPixels = true;
-    }
-
-    private void saveToLocal(Bitmap bitmap, String imgPath) {
-        File file = new File(imgPath);
-        if (file.exists()) {
-            file.delete();
-        }
-        FileOutputStream out;
-        try {
-            out = new FileOutputStream(file);
-            if (bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)) {
-                out.flush();
-                out.close();
-                if(mCallback != null) mCallback.onReadPixelsSaveToLocal(file.getAbsolutePath());
-            }
-            bitmap.recycle();
-        } catch (FileNotFoundException e) {
-            e.printStackTrace();
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
     }
 
     public interface Callback {

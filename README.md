@@ -50,10 +50,13 @@ compileOptions {
 
 #### 添加权限
 ```xml
-<uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
-    <uses-permission android:name="android.permission.CAMERA"/>
-    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+<!-- Required: camera access -->
+<uses-permission android:name="android.permission.CAMERA"/>
+<!-- Required only if recording video with audio -->
+<uses-permission android:name="android.permission.RECORD_AUDIO"/>
+<!-- NOTE: WRITE/READ_EXTERNAL_STORAGE are NOT needed.
+     All capture output is saved to getExternalFilesDir() (app-private dir),
+     which requires no storage permission on Android 10+ (API 29+). -->
 ```
 #### xml布局文件
 ```xml

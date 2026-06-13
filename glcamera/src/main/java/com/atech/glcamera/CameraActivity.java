@@ -47,9 +47,15 @@ import java.nio.ByteBuffer;
 import java.util.Arrays;
 
 public class CameraActivity extends AppCompatActivity implements Camera2FrameCallback, GLByteFlowRender.Callback {
+    // Only CAMERA is required at runtime. Capture results are saved to
+    // getExternalFilesDir(Environment.DIRECTORY_PICTURES), which is an
+    // app-private directory and needs no storage permission on any API level.
+    // On Android 10+ (API 29) scoped-storage makes WRITE_EXTERNAL_STORAGE
+    // irrelevant for this path, and on Android 13+ (API 33) the permission
+    // is auto-denied — gating the camera on it would block the preview
+    // permanently.
     private static final String[] REQUEST_PERMISSIONS = {
             Manifest.permission.CAMERA,
-            Manifest.permission.WRITE_EXTERNAL_STORAGE,
     };
     private static final int CAMERA_PERMISSION_REQUEST_CODE = 1;
     GLSurfaceView mGLSurfaceView;

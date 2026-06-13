@@ -3,8 +3,9 @@
     package="com.atech.cameraapi">
 
     <uses-permission android:name="android.permission.CAMERA" />
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+    <!-- WRITE_EXTERNAL_STORAGE intentionally omitted:
+         All capture output goes to getExternalFilesDir() (app-private),
+         which requires no storage permission on Android 10+ (API 29+). -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
     <uses-feature android:name="android.hardware.camera" />

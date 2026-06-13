@@ -5,7 +5,6 @@ import static android.opengl.GLSurfaceView.RENDERMODE_WHEN_DIRTY;
 import static com.atech.glcamera.render.ByteFlowRender.IMAGE_FORMAT_I420;
 import static com.atech.glcamera.render.ByteFlowRender.IMAGE_FORMAT_RGBA;
 
-import android.Manifest;
 import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.pm.PackageManager;
@@ -47,10 +46,7 @@ import java.nio.ByteBuffer;
 import java.util.Arrays;
 
 public class CameraActivity extends AppCompatActivity implements Camera2FrameCallback, GLByteFlowRender.Callback {
-    private static final String[] REQUEST_PERMISSIONS = {
-            Manifest.permission.CAMERA,
-            Manifest.permission.WRITE_EXTERNAL_STORAGE,
-    };
+    private static final String[] REQUEST_PERMISSIONS = CameraPermissions.requiredToStartCamera();
     private static final int CAMERA_PERMISSION_REQUEST_CODE = 1;
     GLSurfaceView mGLSurfaceView;
     Camera2Wrapper mCamera2Wrapper;
